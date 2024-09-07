@@ -1,35 +1,82 @@
-const express = require('express');
+const http = require('http');
 const WebSocket = require('ws');
 
-const app = express();
+// Create an HTTP server
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('WebSocket server is running.\n');
+});
 
-// Initialize WebSocket server
-const wss = new WebSocket.Server({ port: 8080 });
+// Create a WebSocket server
+const wss = new WebSocket.Server({ server });
 
-// WebSocket event handling
-wss.on('connection', (ws) => {
-  console.log('A new client connected.');
+const clients = {};
 
-  // Event listener for incoming messages
+// Function to broadcast user list to all connected clients
+const broadcastUserList = () => {
+  const userList = Object.keys(clients);
+  const packet = JSON.stringify({ type: 'USERLIST', users: userList });
+  Object.values(clients).forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(packet);
+    }
+  });
+};
+
+// Handle WebSocket connection
+wss.on('connection', (ws, req) => {
+  // Extract user ID and name from query parameters
+  const params = new URLSearchParams(req.url.split('?')[1]);
+  const userId = params.get('USERID');
+  const userName = params.get('USER');
+
+  if (!userId || !userName) {
+    ws.close();
+    return;
+  }
+
+  // Add new client to the clients object
+  clients[userId] = ws;
+  console.log(`User ${userName} connected with ID ${userId}`);
+
+  // Broadcast the updated user list
+  broadcastUserList();
+
+  // Handle incoming messages
   ws.on('message', (message) => {
-    console.log('Received message:', message.toString());
+    try {
+      const msgData = JSON.parse(message);
+      const { msg, from, to } = msgData;
 
-    // Broadcast the message to all connected clients
-    wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(message.toString());
+      if (clients[to]) {
+        // Send message to the intended recipient
+        const response = JSON.stringify({ type: 'MSG', msg, from });
+        clients[to].send(response);
+      } else {
+        // Send a message back to the sender if the recipient is not available
+        const response = JSON.stringify({ type: 'MSG', msg: 'USER Not Available', from });
+        ws.send(response);
       }
-    });
+    } catch (error) {
+      console.error('Error handling message:', error);
+    }
   });
 
-  // Event listener for client disconnection
+  // Handle client disconnection
   ws.on('close', () => {
-    console.log('A client disconnected.');
+    console.log(`User ${userName} disconnected with ID ${userId}`);
+    delete clients[userId];
+    broadcastUserList();
+  });
+
+  // Handle errors
+  ws.on('error', (error) => {
+    console.error('WebSocket error:', error);
   });
 });
 
-// Start the server
-const port = 3000;
-app.listen(port, () => {
-  console.log(`Server started on http://localhost:${port}`);
+// Start the HTTP server
+const port = process.env.PORT || 8000;
+server.listen(port, () => {
+  console.log(`Server is listening on port ${port}`);
 });
